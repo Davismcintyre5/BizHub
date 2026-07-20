@@ -1,0 +1,45 @@
+appId: co.ke.bizhub.desktop
+productName: BizHub
+copyright: Copyright © 2026 Davis Okoth
+author: Davis Okoth
+publisherName: Davis Okoth
+
+directories:
+  output: dist
+  buildResources: assets
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: assets/icon.ico
+  publisherName: Davis Okoth
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  icon: assets/icon.icns
+  category: public.app-category.business
+
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+  icon: assets/icon.png
+  category: Office
+
+nsis:
+  oneClick: true
+  perMachine: false
+  allowToChangeInstallationDirectory: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: BizHub
+  uninstallDisplayName: BizHub
+  installerIcon: assets/icon.ico
+  uninstallerIcon: assets/icon.ico
