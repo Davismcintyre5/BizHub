@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { HashRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { SiteProvider } from './context/SiteContext';
 import { AiProvider } from './context/AiContext';
@@ -42,7 +42,8 @@ function AppGate({ children }) {
     );
   }
 
-  const path = window.location.pathname;
+  // Use hash for Electron compatibility
+  const path = window.location.hash.replace('#', '') || '/';
 
   // Full platform maintenance — block everything except admin
   if (flags?.maintenance_platform === 'true' && !path.startsWith('/admin')) {
@@ -76,7 +77,7 @@ function AppGate({ children }) {
 
 export default function App() {
   return (
-    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <ThemeProvider>
         <NotificationProvider>
           <AuthProvider>
@@ -101,6 +102,6 @@ export default function App() {
           </AuthProvider>
         </NotificationProvider>
       </ThemeProvider>
-    </BrowserRouter>
+    </HashRouter>
   );
 }

@@ -8,6 +8,16 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+// Helper function for HashRouter-compatible redirects
+const redirectTo = (path) => {
+  // Check if running in Electron (no server, uses hash)
+  if (window.location.protocol === 'file:' || window.location.hash) {
+    window.location.hash = path;
+  } else {
+    window.location.href = path;
+  }
+};
+
 api.interceptors.request.use((config) => {
   const token = getToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
@@ -23,7 +33,7 @@ api.interceptors.response.use(
 
     // Maintenance mode
     if (status === 503 && errorCode === 'MAINTENANCE') {
-      window.location.href = '/maintenance';
+      redirectTo('#/maintenance');
       return Promise.reject(error);
     }
 
@@ -33,7 +43,7 @@ api.interceptors.response.use(
       const tenantId = user?.tenantId || '';
       const module = originalRequest?.url?.split('/')[1] || 'pharma';
       if (tenantId) {
-        window.location.href = `/renewal?tenant=${tenantId}&module=${module}`;
+        redirectTo(`#/renewal?tenant=${tenantId}&module=${module}`);
       }
       return Promise.reject(error);
     }
@@ -51,7 +61,7 @@ api.interceptors.response.use(
         return api(originalRequest);
       } catch {
         clearAuth();
-        window.location.href = '/login';
+        redirectTo('#/login');
         return Promise.reject(error);
       }
     }

@@ -1,48 +1,37 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, Notification, nativeImage, session } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
-const { initUpdater, checkForUpdates } = require('./updater');
-const { initTray } = require('./tray');
-const printerService = require('./services/printer');
-const storageService = require('./services/storage');
-const offlineService = require('./services/offline');
-const notificationService = require('./services/notification');
 
 let mainWindow = null;
 let tray = null;
-const isDev = process.env.NODE_ENV === 'development';
 
-const APP_URL = 'https://bizhub.pxxl.click';
+const isDev = process.env.NODE_ENV === 'development';
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1366,
-    height: 900,
-    minWidth: 1024,
-    minHeight: 700,
-    title: 'BizHub',
-    icon: path.join(__dirname, '../assets/icon.png'),
-    frame: false,
-    titleBarStyle: 'hidden',
+    width: 1200,
+    height: 800,
+    minWidth: 900,
+    minHeight: 600,
+    frame: true,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js')
     },
-    show: false,
-    backgroundColor: '#f8fafc',
+    icon: path.join(__dirname, '../assets/icon.png'),
+    show: false
   });
 
-  mainWindow.loadURL(APP_URL);
+  // Always load from built files
+  mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: '/login' });
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    if (!isDev) checkForUpdates(mainWindow);
   });
 
-  mainWindow.on('close', (e) => {
-    if (tray) {
-      e.preventDefault();
+  mainWindow.on('close', (event) => {
+    if (tray && !app.isQuitting) {
+      event.preventDefault();
       mainWindow.hide();
     }
   });
@@ -52,111 +41,83 @@ function createWindow() {
   });
 }
 
-// ============================================
-// IPC Handlers
-// ============================================
-
-// Printer
-ipcMain.handle('print-receipt', async (_, data) => {
-  return printerService.printReceipt(data);
-});
-
-ipcMain.handle('print-invoice', async (_, data) => {
-  return printerService.printInvoice(data);
-});
-
-ipcMain.handle('get-printers', async () => {
-  return printerService.getPrinters();
-});
-
-// Storage
-ipcMain.handle('store-get', async (_, key) => {
-  return storageService.get(key);
-});
-
-ipcMain.handle('store-set', async (_, key, value) => {
-  return storageService.set(key, value);
-});
-
-ipcMain.handle('store-delete', async (_, key) => {
-  return storageService.delete(key);
-});
-
-// Offline
-ipcMain.handle('offline-queue', async (_, action) => {
-  return offlineService.queueAction(action);
-});
-
-ipcMain.handle('offline-sync', async () => {
-  return offlineService.syncNow();
-});
-
-ipcMain.handle('offline-pending', async () => {
-  return offlineService.getPendingCount();
-});
-
-// Notifications
-ipcMain.handle('notify', async (_, title, body) => {
-  return notificationService.show(title, body);
-});
-
-// App
-ipcMain.handle('get-version', () => {
-  return app.getVersion();
-});
-
-ipcMain.handle('check-update', async () => {
-  return checkForUpdates(mainWindow);
-});
-
-ipcMain.handle('restart-app', () => {
-  app.relaunch();
-  app.exit();
-});
-
-// Window controls
-ipcMain.handle('window-minimize', () => {
-  mainWindow?.minimize();
-});
-
-ipcMain.handle('window-maximize', () => {
-  if (mainWindow?.isMaximized()) {
-    mainWindow.unmaximize();
-  } else {
-    mainWindow?.maximize();
-  }
-});
-
-ipcMain.handle('window-close', () => {
-  mainWindow?.close();
-});
-
-ipcMain.handle('window-is-maximized', () => {
-  return mainWindow?.isMaximized();
-});
-
-// Online/Offline detection
-ipcMain.handle('get-online-status', () => {
-  return require('electron').net.isOnline();
-});
-
-// ============================================
-// App Lifecycle
-// ============================================
-
+// Initialize app
 app.whenReady().then(() => {
   createWindow();
-  tray = initTray(mainWindow);
+  
+  try {
+    const { createTray } = require('./tray.js');
+    tray = createTray(mainWindow);
+  } catch (err) {
+    console.log('Tray not available:', err.message);
+  }
+  
+  try {
+    const { initDatabase, registerDatabaseHandlers } = require('./database.js');
+    initDatabase();
+    registerDatabaseHandlers(ipcMain);
+  } catch (err) {
+    console.log('Database not available:', err.message);
+  }
+  
+  try {
+    const { initOfflineQueue, registerOfflineHandlers } = require('./offline-queue.js');
+    initOfflineQueue();
+    registerOfflineHandlers(ipcMain);
+  } catch (err) {
+    console.log('Offline queue not available:', err.message);
+  }
+  
+  if (!isDev) {
+    try {
+      const { initAutoUpdater, registerUpdaterHandlers } = require('./updater.js');
+      initAutoUpdater(mainWindow);
+      registerUpdaterHandlers(ipcMain);
+    } catch (err) {
+      console.log('Updater not available:', err.message);
+    }
+  }
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (mainWindow === null) {
+      createWindow();
+    } else {
+      mainWindow.show();
+    }
   });
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
 });
 
 app.on('before-quit', () => {
-  tray = null;
+  app.isQuitting = true;
+});
+
+// IPC Handlers
+ipcMain.handle('get-app-version', () => app.getVersion());
+
+ipcMain.handle('toggle-maximize', () => {
+  if (mainWindow) {
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow.maximize();
+    }
+  }
+});
+
+ipcMain.handle('minimize-window', () => {
+  if (mainWindow) {
+    mainWindow.minimize();
+  }
+});
+
+ipcMain.handle('close-window', () => {
+  if (mainWindow) {
+    mainWindow.close();
+  }
 });

@@ -1,41 +1,46 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  // Printer
-  printReceipt: (data) => ipcRenderer.invoke('print-receipt', data),
-  printInvoice: (data) => ipcRenderer.invoke('print-invoice', data),
-  getPrinters: () => ipcRenderer.invoke('get-printers'),
-
-  // Storage
-  storeGet: (key) => ipcRenderer.invoke('store-get', key),
-  storeSet: (key, value) => ipcRenderer.invoke('store-set', key, value),
-  storeDelete: (key) => ipcRenderer.invoke('store-delete', key),
-
-  // Offline
-  queueAction: (action) => ipcRenderer.invoke('offline-queue', action),
-  syncNow: () => ipcRenderer.invoke('offline-sync'),
-  getPendingCount: () => ipcRenderer.invoke('offline-pending'),
-
-  // Notifications
-  notify: (title, body) => ipcRenderer.invoke('notify', title, body),
-
-  // App
-  getVersion: () => ipcRenderer.invoke('get-version'),
-  checkUpdate: () => ipcRenderer.invoke('check-update'),
-  restartApp: () => ipcRenderer.invoke('restart-app'),
-
-  // Window
-  minimizeWindow: () => ipcRenderer.invoke('window-minimize'),
-  maximizeWindow: () => ipcRenderer.invoke('window-maximize'),
-  closeWindow: () => ipcRenderer.invoke('window-close'),
-  isMaximized: () => ipcRenderer.invoke('window-is-maximized'),
-
-  // Network
-  isOnline: () => ipcRenderer.invoke('get-online-status'),
-  onOnlineChange: (callback) => {
-    ipcRenderer.on('online-status-changed', (_, status) => callback(status));
+  // App info
+  getVersion: () => ipcRenderer.invoke('get-app-version'),
+  
+  // Window controls
+  toggleMaximize: () => ipcRenderer.invoke('toggle-maximize'),
+  minimizeWindow: () => ipcRenderer.invoke('minimize-window'),
+  closeWindow: () => ipcRenderer.invoke('close-window'),
+  
+  // Database operations
+  db: {
+    execute: (sql, params) => ipcRenderer.invoke('db-execute', sql, params),
+    query: (sql, params) => ipcRenderer.invoke('db-query', sql, params),
+    getAll: (sql, params) => ipcRenderer.invoke('db-get-all', sql, params),
   },
-
-  // Platform
-  platform: process.platform,
+  
+  // Offline queue
+  offlineQueue: {
+    add: (action) => ipcRenderer.invoke('offline-queue-add', action),
+    getAll: () => ipcRenderer.invoke('offline-queue-get-all'),
+    remove: (id) => ipcRenderer.invoke('offline-queue-remove', id),
+    process: () => ipcRenderer.invoke('offline-queue-process'),
+    getStatus: () => ipcRenderer.invoke('offline-queue-status'),
+  },
+  
+  // Updates
+  updates: {
+    checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+    downloadUpdate: () => ipcRenderer.invoke('download-update'),
+    installUpdate: () => ipcRenderer.invoke('install-update'),
+  },
+  
+  // Events
+  on: (channel, callback) => {
+    const validChannels = ['update-available', 'update-downloaded', 'update-error', 'download-progress', 'offline-status', 'sync-complete'];
+    if (validChannels.includes(channel)) {
+      ipcRenderer.on(channel, (event, ...args) => callback(...args));
+    }
+  },
+  
+  removeAllListeners: (channel) => {
+    ipcRenderer.removeAllListeners(channel);
+  }
 });

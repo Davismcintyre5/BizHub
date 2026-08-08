@@ -3,8 +3,11 @@ import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import { MobileNav } from './MobileNav';
 import { ToastContainer } from '../../ui/ToastContainer';
+import { useAppVersion } from '../../../hooks/useAppVersion';
 
 export function PharmaLayout() {
+  const { version } = useAppVersion();
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">
@@ -17,7 +20,7 @@ export function PharmaLayout() {
         </main>
         <footer className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 px-6 py-3 hidden lg:block">
           <div className="flex items-center justify-between text-xs text-gray-400 dark:text-gray-500">
-            <p>© {new Date().getFullYear()} BizHub — PharmaSys v1.0.0</p>
+            <p>© {new Date().getFullYear()} BizHub — PharmaSys v{version}</p>
             <p>Built with ❤️ by BizHub Team</p>
           </div>
         </footer>
