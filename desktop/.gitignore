@@ -1,0 +1,10 @@
+node_modules/
+dist/
+release/
+assets/icon.png
+assets/icon.ico
+assets/icon.icns
+assets/installer-icon.png
+assets/tray.png
+assets/trayTemplate.png
+assets/pwa-icons/

@@ -1,0 +1,59 @@
+appId: com.hdm.bizhub
+productName: BizHub
+copyright: Copyright © 2026 HDM
+
+directories:
+  output: release/${version}
+  buildResources: assets
+
+files:
+  - dist/**/*
+  - electron/**/*
+  - assets/**/*
+  - package.json
+
+extraResources:
+  - from: assets
+    to: assets
+
+publish:
+  provider: github
+  owner: Davismcintyre5
+  repo: BizHub
+  releaseType: release
+  publishAutoUpdate: true
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  icon: assets/icon.ico
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  artifactName: BizHub-Setup-${version}.exe
+  installerIcon: assets/icon.ico
+  uninstallerIcon: assets/icon.ico
+  installerHeaderIcon: assets/icon.ico
+  installerSidebar: assets/installer-icon.png
+
+portable:
+  artifactName: BizHub-${version}-portable.exe
+
+mac:
+  target: dmg
+  icon: assets/icon.icns
+  category: public.app-category.business
+
+linux:
+  target: AppImage
+  icon: assets/icon.png
+  category: Office
