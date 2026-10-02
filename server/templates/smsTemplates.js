@@ -1,198 +1,306 @@
-// ============================================
-// SMS Templates - Short & Direct Messages
-// ============================================
-
 const env = require('../config/env');
-const APP_NAME = env.APP_NAME || 'BizHub';
 
-// ============================================
-// Platform - User (10)
-// ============================================
+const APP_NAME = () => env.APP_NAME || 'BizHub';
+const CLIENT_URL = () => env.CLIENT_URL || 'http://localhost:3000';
+const ADMIN_URL = () => env.ADMIN_URL || 'http://localhost:3001';
 
-// 1. OTP - Phone Verification
-const otpVerification = ({ code }) => {
-  return `${code} is your ${APP_NAME} verification code. Valid for 5 minutes. Do not share with anyone.`;
-};
+const fmt = (n) => Number(n || 0).toLocaleString('en-KE');
 
-// 2. OTP - Login 2FA
-const otpLogin = ({ code }) => {
-  return `${code} is your ${APP_NAME} login code. Valid for 5 minutes.`;
-};
+/* ============ REGISTRATION ============ */
 
-// 3. OTP - Password Reset
-const otpPasswordReset = ({ code }) => {
-  return `${code} is your ${APP_NAME} password reset code. Valid for 5 minutes.`;
-};
+const tenantRegistrationPending = ({ name, businessName, amount, invoiceNumber }) =>
+  `${APP_NAME()}: ${businessName} reg received. Pay KES ${fmt(amount)} (Inv ${invoiceNumber}) to activate: ${CLIENT_URL()}/invoice/${invoiceNumber}`;
 
-// 4. Registration Confirmation
-const registrationConfirmation = ({ name }) => {
-  return `Welcome to ${APP_NAME}, ${name}! Your account has been created. Awaiting approval. We'll notify you once activated.`;
-};
+const tenantAutoRejected = ({ businessName }) =>
+  `${APP_NAME()}: Registration for ${businessName} expired (no payment). Register again: ${CLIENT_URL()}/pricing`;
 
-// 5. Account Activated
-const accountActivated = ({ name, businessName }) => {
-  return `Great news ${name}! Your ${businessName} account on ${APP_NAME} has been activated. Login at ${env.CLIENT_URL}/login`;
-};
+const tenantApproved = ({ name, businessName, planName }) =>
+  `${APP_NAME()}: Congrats ${name}! ${businessName} is active on ${planName}. Login: ${CLIENT_URL()}/login`;
 
-// 6. Payment Confirmation
-const paymentConfirmation = ({ amount, ref, businessName }) => {
-  return `Payment of KSh ${amount} received for ${businessName}. Ref: ${ref}. Thank you for choosing ${APP_NAME}.`;
-};
+const tenantWelcome = ({ name }) =>
+  `${APP_NAME()}: Welcome ${name}! Your account is ready. Login: ${CLIENT_URL()}/login`;
 
-// 7. Subscription Renewed
-const subscriptionRenewed = ({ businessName, plan }) => {
-  return `${businessName}: Your ${plan} plan on ${APP_NAME} has been renewed successfully.`;
-};
+const tenantRejected = ({ businessName, reason }) =>
+  `${APP_NAME()}: ${businessName} registration not approved.${reason ? ` ${reason}` : ''} Contact support.`;
 
-// 8. Subscription Expiring (3 days)
-const subscriptionExpiring = ({ businessName, daysLeft }) => {
-  return `${businessName}: Your ${APP_NAME} subscription expires in ${daysLeft} days. Renew now to avoid interruption: ${env.CLIENT_URL}/billing`;
-};
+const tenantSuspended = ({ businessName, reason }) =>
+  `${APP_NAME()}: ${businessName} suspended.${reason ? ` ${reason}` : ''} Contact support.`;
 
-// 9. Trial Ending (2 days)
-const trialEnding = ({ businessName, daysLeft }) => {
-  return `${businessName}: Your free trial ends in ${daysLeft} days. Subscribe to continue: ${env.CLIENT_URL}/pricing`;
-};
+const tenantReactivated = ({ name, businessName }) =>
+  `${APP_NAME()}: Welcome back ${name}! ${businessName} is active. Login: ${CLIENT_URL()}/login`;
 
-// 10. Account Suspended
-const accountSuspended = ({ businessName }) => {
-  return `${businessName}: Your ${APP_NAME} account has been suspended. Contact support@bizhub.co.ke for assistance.`;
-};
+/* ============ PAYMENT ============ */
 
-// 11. Account Reactivated
-const accountReactivated = ({ businessName }) => {
-  return `Good news! Your ${businessName} account on ${APP_NAME} has been reactivated. Welcome back!`;
-};
+const tenantPaymentReceived = ({ businessName, invoiceNumber, amount }) =>
+  `${APP_NAME()}: KES ${fmt(amount)} received for ${businessName} (Inv ${invoiceNumber}). Account under review.`;
 
-// ============================================
-// Platform - Admin (2)
-// ============================================
+const tenantInvoiceReminder = ({ invoiceNumber, amount, minutesLeft }) =>
+  `${APP_NAME()}: Invoice ${invoiceNumber} (KES ${fmt(amount)}) due${minutesLeft ? ` in ${minutesLeft}min` : ' soon'}. Pay now to avoid cancellation.`;
 
-// 12. New Registration Alert
-const newRegistrationAdmin = ({ businessName, plan, ownerName }) => {
-  return `New ${APP_NAME} registration: ${businessName} (${plan}) by ${ownerName}. Login to admin panel to approve.`;
-};
+const tenantInvoiceExpired = ({ invoiceNumber, businessName }) =>
+  `${APP_NAME()}: Invoice ${invoiceNumber} for ${businessName} expired. Register again: ${CLIENT_URL()}/pricing`;
 
-// ============================================
-// Module-Level (16)
-// ============================================
+const tenantPaymentReceipt = ({ invoiceNumber, amount, reference }) =>
+  `${APP_NAME()}: Receipt - Inv ${invoiceNumber}, KES ${fmt(amount)} paid. Ref: ${reference || 'N/A'}. Thank you.`;
 
-// 13. Order Confirmed
-const orderConfirmed = ({ orderNo, businessName, total }) => {
-  return `Order #${orderNo} confirmed at ${businessName}. Total: KSh ${total}. We'll notify you when ready.`;
-};
+/* ============ RENEWAL ============ */
 
-// 14. Order Ready for Pickup
-const orderReady = ({ orderNo, businessName }) => {
-  return `Your order #${orderNo} at ${businessName} is ready for pickup! Thank you for your patience.`;
-};
+const tenantRenewalRequested = ({ businessName, amount, invoiceNumber }) =>
+  `${APP_NAME()}: Renewal invoice ${invoiceNumber} for ${businessName}. Pay KES ${fmt(amount)}: ${CLIENT_URL()}/invoice/${invoiceNumber}`;
 
-// 15. Low Stock Alert
-const lowStockAlert = ({ businessName, itemName, stockLeft }) => {
-  return `Low stock alert: ${itemName} at ${businessName} has only ${stockLeft} remaining. Time to reorder.`;
-};
+const tenantRenewalApproved = ({ businessName, planName, newExpiry }) =>
+  `${APP_NAME()}: ${businessName} renewed on ${planName} until ${newExpiry}. Thank you.`;
 
-// 16. Expiry Alert (7 days)
-const expiryAlert7Days = ({ businessName, medicineName, expiryDate }) => {
-  return `Expiry alert: ${medicineName} at ${businessName} expires on ${expiryDate} (7 days). Please clear stock.`;
-};
+const tenantRenewalRejected = ({ businessName, reason }) =>
+  `${APP_NAME()}: Renewal for ${businessName} not approved.${reason ? ` ${reason}` : ''} Try again: ${CLIENT_URL()}/renewal`;
 
-// 17. Expiry Alert (today)
-const expiryAlertToday = ({ businessName, medicineName }) => {
-  return `URGENT: ${medicineName} at ${businessName} expires TODAY. Remove from stock immediately.`;
-};
+const tenantSubscriptionExpired = ({ businessName, planName }) =>
+  `${APP_NAME()}: ${businessName} (${planName}) expired. Renew: ${CLIENT_URL()}/renewal`;
 
-// 18. Prescription Ready
-const prescriptionReady = ({ prescriptionNo, businessName }) => {
-  return `Your prescription #${prescriptionNo} is ready for pickup at ${businessName}.`;
-};
+const tenantSubscriptionExpiring = ({ businessName, daysLeft }) =>
+  `${APP_NAME()}: ${businessName} expires in ${daysLeft}d. Renew: ${CLIENT_URL()}/renewal`;
 
-// 19. Rent Reminder (3 days before)
-const rentReminder = ({ unitNumber, amount, dueDate, businessName }) => {
-  return `Reminder: Rent for ${unitNumber} (KSh ${amount}) at ${businessName} is due on ${dueDate}. Please pay on time.`;
-};
+/* ============ UPGRADE ============ */
 
-// 20. Rent Reminder (due today)
-const rentDueToday = ({ unitNumber, amount, businessName }) => {
-  return `Rent for ${unitNumber} (KSh ${amount}) at ${businessName} is due TODAY. Kindly make payment to avoid penalties.`;
-};
+const tenantUpgradeRequested = ({ businessName, oldPlan, newPlan, amount, invoiceNumber }) =>
+  `${APP_NAME()}: Upgrade invoice ${invoiceNumber} for ${businessName}. ${oldPlan}->${newPlan}, KES ${fmt(amount)}: ${CLIENT_URL()}/invoice/${invoiceNumber}`;
 
-// 21. Rent Overdue (3 days)
-const rentOverdue = ({ unitNumber, amount, daysOverdue, businessName }) => {
-  return `OVERDUE: Rent for ${unitNumber} (KSh ${amount}) at ${businessName} is ${daysOverdue} days late. Please pay immediately.`;
-};
+const tenantUpgradeApproved = ({ businessName, newPlan }) =>
+  `${APP_NAME()}: ${businessName} upgraded to ${newPlan}. Login: ${CLIENT_URL()}/login`;
 
-// 22. Rent Payment Received
-const rentPaymentReceived = ({ unitNumber, amount, month, receiptNo }) => {
-  return `Rent payment received: ${unitNumber}, KSh ${amount} for ${month}. Receipt: ${receiptNo}. Thank you!`;
-};
+const tenantUpgradeRejected = ({ businessName }) =>
+  `${APP_NAME()}: Upgrade for ${businessName} not approved. Contact support.`;
 
-// 23. Lease Expiring (14 days)
-const leaseExpiring = ({ unitNumber, expiryDate, businessName }) => {
-  return `Your lease for ${unitNumber} at ${businessName} expires on ${expiryDate}. Contact us to discuss renewal.`;
-};
+/* ============ SECURITY ============ */
 
-// 24. Maintenance Scheduled
-const maintenanceScheduled = ({ unitNumber, issue, scheduledDate, businessName }) => {
-  return `Maintenance for ${unitNumber} (${issue}) at ${businessName} scheduled for ${scheduledDate}. We'll keep you updated.`;
-};
+const newDeviceLogin = ({ name, device, ip }) =>
+  `${APP_NAME()}: ${name}, new login on ${device || 'unknown device'} (IP ${ip || 'N/A'}). Not you? Reset password now.`;
 
-// 25. Maintenance Completed
-const maintenanceCompleted = ({ unitNumber, issue, businessName }) => {
-  return `Maintenance completed: ${unitNumber} (${issue}) at ${businessName} has been resolved. Thank you for your patience.`;
-};
+const suspiciousActivity = ({ name, attempts }) =>
+  `${APP_NAME()}: ${name}, ${attempts} failed logins detected. Reset your password if this wasn't you.`;
 
-// 26. Repair Ready for Collection
-const repairReady = ({ device, repairNo, businessName }) => {
-  return `Your ${device} (Repair #${repairNo}) is ready for collection at ${businessName}.`;
-};
+const passwordChangedAlert = ({ name }) =>
+  `${APP_NAME()}: ${name}, your password was changed. If this wasn't you, contact support now.`;
 
-// 27. Warranty Expiring (14 days)
-const warrantyExpiring = ({ product, expiryDate, businessName }) => {
-  return `Your ${product} warranty from ${businessName} expires on ${expiryDate}. Visit us for any warranty claims.`;
-};
+const emailChangedAlert = ({ name, newEmail }) =>
+  `${APP_NAME()}: ${name}, email changed to ${newEmail}. If this wasn't you, contact support.`;
 
-// 28. Session Ended / Receipt
-const sessionReceipt = ({ sessionNo, duration, amount, businessName }) => {
-  return `Session #${sessionNo} at ${businessName}: ${duration}, Total KSh ${amount}. Thank you for visiting!`;
-};
+const accountLocked = ({ name }) =>
+  `${APP_NAME()}: ${name}, account locked due to failed logins. Contact support.`;
 
-// ============================================
-// Export All Templates
-// ============================================
+/* ============ OTP ============ */
+
+const otpVerification = ({ code }) =>
+  `${code} is your ${APP_NAME()} verification code. Valid 5 min. Do not share.`;
+
+const otpLogin = ({ code }) =>
+  `${code} is your ${APP_NAME()} login code. Valid 5 min.`;
+
+const otpPasswordReset = ({ code }) =>
+  `${code} is your ${APP_NAME()} password reset code. Valid 5 min.`;
+
+const emailVerify = ({ code }) =>
+  `${code} is your ${APP_NAME()} email verification code. Valid 10 min.`;
+
+/* ============ ADMIN ============ */
+
+const adminNewRegistration = ({ businessName, ownerName, planName, amount }) =>
+  `${APP_NAME()} ADMIN: New reg - ${businessName} by ${ownerName}. ${planName}, KES ${fmt(amount)}. ${ADMIN_URL()}/approvals`;
+
+const adminPaymentReceived = ({ businessName, amount, reference }) =>
+  `${APP_NAME()} ADMIN: Payment - ${businessName}, KES ${fmt(amount)}. Ref: ${reference || 'N/A'}. ${ADMIN_URL()}/approvals`;
+
+const adminRenewalRequest = ({ businessName, planName, amount }) =>
+  `${APP_NAME()} ADMIN: Renewal - ${businessName}, ${planName}, KES ${fmt(amount)}. ${ADMIN_URL()}/approvals`;
+
+const adminUpgradeRequest = ({ businessName, oldPlan, newPlan, amount }) =>
+  `${APP_NAME()} ADMIN: Upgrade - ${businessName} ${oldPlan}->${newPlan}, KES ${fmt(amount)}. ${ADMIN_URL()}/approvals`;
+
+const adminSystemAlert = ({ level, title, message }) =>
+  `${APP_NAME()} ADMIN [${(level || 'INFO').toUpperCase()}]: ${title || 'Alert'}${message ? ` - ${message}` : ''}`;
+
+/* ============ SUPPORT ============ */
+
+const supportTicketCreated = ({ ticketId, subject }) =>
+  `${APP_NAME()}: Ticket #${ticketId} received - "${subject}". We'll respond shortly.`;
+
+const supportTicketResolved = ({ ticketId }) =>
+  `${APP_NAME()}: Ticket #${ticketId} resolved. Thank you.`;
+
+/* ============ RESTO ============ */
+
+const orderConfirmed = ({ orderNo, businessName, total }) =>
+  `${APP_NAME()}: Order #${orderNo} at ${businessName} confirmed. KES ${fmt(total)}.`;
+
+const orderReady = ({ orderNo, businessName }) =>
+  `${APP_NAME()}: Order #${orderNo} at ${businessName} is ready!`;
+
+const restoLowStock = ({ businessName, itemName, stockLeft }) =>
+  `${APP_NAME()}: Low stock - ${itemName} at ${businessName} (${stockLeft} left). Reorder soon.`;
+
+/* ============ PHARMA ============ */
+
+const expiryAlert7Days = ({ medicineName, expiryDate }) =>
+  `${APP_NAME()}: ${medicineName} expires ${expiryDate} (7 days). Clear stock.`;
+
+const expiryAlertToday = ({ medicineName }) =>
+  `${APP_NAME()} URGENT: ${medicineName} expires TODAY. Remove from stock.`;
+
+const prescriptionReady = ({ prescriptionNo, businessName }) =>
+  `${APP_NAME()}: Prescription #${prescriptionNo} ready at ${businessName}.`;
+
+const pharmaLowStock = ({ businessName, itemName, stockLeft }) =>
+  `${APP_NAME()}: Low stock - ${itemName} at ${businessName} (${stockLeft} left).`;
+
+/* ============ APARTMENT ============ */
+
+const rentReminder = ({ unitNumber, amount, dueDate }) =>
+  `${APP_NAME()}: Rent for ${unitNumber} (KES ${fmt(amount)}) due ${dueDate}.`;
+
+const rentDueToday = ({ unitNumber, amount }) =>
+  `${APP_NAME()}: Rent for ${unitNumber} (KES ${fmt(amount)}) due TODAY.`;
+
+const rentOverdue = ({ unitNumber, amount, daysOverdue }) =>
+  `${APP_NAME()}: OVERDUE rent for ${unitNumber} (KES ${fmt(amount)}), ${daysOverdue}d late.`;
+
+const rentPaymentReceived = ({ unitNumber, amount, month, receiptNo }) =>
+  `${APP_NAME()}: Rent received - ${unitNumber}, KES ${fmt(amount)} for ${month}. Receipt ${receiptNo}.`;
+
+const leaseExpiring = ({ unitNumber, expiryDate }) =>
+  `${APP_NAME()}: Lease for ${unitNumber} expires ${expiryDate}. Contact us to renew.`;
+
+const maintenanceScheduled = ({ unitNumber, issue, scheduledDate }) =>
+  `${APP_NAME()}: Maintenance for ${unitNumber} (${issue}) scheduled ${scheduledDate}.`;
+
+const maintenanceCompleted = ({ unitNumber, issue }) =>
+  `${APP_NAME()}: Maintenance for ${unitNumber} (${issue}) completed.`;
+
+/* ============ ELECTRO ============ */
+
+const repairReady = ({ device, repairNo, businessName }) =>
+  `${APP_NAME()}: ${device} (Repair #${repairNo}) ready at ${businessName}.`;
+
+const warrantyExpiring = ({ product, expiryDate }) =>
+  `${APP_NAME()}: Warranty for ${product} expires ${expiryDate}.`;
+
+const electroLowStock = ({ itemName, stockLeft }) =>
+  `${APP_NAME()}: Low stock - ${itemName} (${stockLeft} left).`;
+
+/* ============ CYBER ============ */
+
+const sessionReceipt = ({ sessionNo, duration, amount }) =>
+  `${APP_NAME()}: Session #${sessionNo}: ${duration}, KES ${fmt(amount)}. Thank you.`;
+
+const packageExpiring = ({ packageName, daysLeft }) =>
+  `${APP_NAME()}: Your ${packageName} package expires in ${daysLeft}d.`;
+
+/* ============ MODULE ============ */
+
+const moduleAdded = ({ moduleName }) =>
+  `${APP_NAME()}: ${moduleName} module activated. Login: ${CLIENT_URL()}/login`;
+
+const moduleSwitched = ({ moduleName }) =>
+  `${APP_NAME()}: Switched to ${moduleName}.`;
+
+/* ============ GENERIC ============ */
+
+const broadcast = ({ message }) => `${APP_NAME()}: ${message}`;
+const generic = ({ message }) => `${APP_NAME()}: ${message}`;
 
 module.exports = {
-  // Platform - User
-  otpVerification,           // 1
-  otpLogin,                  // 2
-  otpPasswordReset,          // 3
-  registrationConfirmation,  // 4
-  accountActivated,          // 5
-  paymentConfirmation,       // 6
-  subscriptionRenewed,       // 7
-  subscriptionExpiring,      // 8
-  trialEnding,               // 9
-  accountSuspended,          // 10
-  accountReactivated,        // 11
+  /* Registration */
+  tenantRegistrationPending,
+  tenantAutoRejected,
+  tenantApproved,
+  tenantWelcome,
+  tenantRejected,
+  tenantSuspended,
+  tenantReactivated,
 
-  // Platform - Admin
-  newRegistrationAdmin,      // 12
+  /* Payment */
+  tenantPaymentReceived,
+  tenantInvoiceReminder,
+  tenantInvoiceExpired,
+  tenantPaymentReceipt,
 
-  // Module-Level
-  orderConfirmed,            // 13
-  orderReady,                // 14
-  lowStockAlert,             // 15
-  expiryAlert7Days,          // 16
-  expiryAlertToday,          // 17
-  prescriptionReady,         // 18
-  rentReminder,              // 19
-  rentDueToday,              // 20
-  rentOverdue,               // 21
-  rentPaymentReceived,       // 22
-  leaseExpiring,             // 23
-  maintenanceScheduled,      // 24
-  maintenanceCompleted,      // 25
-  repairReady,               // 26
-  warrantyExpiring,          // 27
-  sessionReceipt,            // 28
+  /* Renewal */
+  tenantRenewalRequested,
+  tenantRenewalApproved,
+  tenantRenewalRejected,
+  tenantSubscriptionExpired,
+  tenantSubscriptionExpiring,
+
+  /* Upgrade */
+  tenantUpgradeRequested,
+  tenantUpgradeApproved,
+  tenantUpgradeRejected,
+
+  /* Security */
+  newDeviceLogin,
+  suspiciousActivity,
+  passwordChangedAlert,
+  emailChangedAlert,
+  accountLocked,
+
+  /* OTP */
+  otpVerification,
+  otpLogin,
+  otpPasswordReset,
+  emailVerify,
+
+  /* Admin */
+  adminNewRegistration,
+  adminPaymentReceived,
+  adminRenewalRequest,
+  adminUpgradeRequest,
+  adminSystemAlert,
+
+  /* Support */
+  supportTicketCreated,
+  supportTicketResolved,
+
+  /* Resto */
+  orderConfirmed,
+  orderReady,
+  restoLowStock,
+
+  /* Pharma */
+  expiryAlert7Days,
+  expiryAlertToday,
+  prescriptionReady,
+  pharmaLowStock,
+
+  /* Apartment */
+  rentReminder,
+  rentDueToday,
+  rentOverdue,
+  rentPaymentReceived,
+  leaseExpiring,
+  maintenanceScheduled,
+  maintenanceCompleted,
+
+  /* Electro */
+  repairReady,
+  warrantyExpiring,
+  electroLowStock,
+
+  /* Cyber */
+  sessionReceipt,
+  packageExpiring,
+
+  /* Module */
+  moduleAdded,
+  moduleSwitched,
+
+  /* Generic */
+  broadcast,
+  generic,
+
+  /* Legacy aliases */
+  lowStockAlert: restoLowStock,
+  accountActivated: tenantApproved,
+  subscriptionRenewed: tenantRenewalApproved,
+  subscriptionExpiring: tenantSubscriptionExpiring,
+  accountSuspended: tenantSuspended,
+  accountReactivated: tenantReactivated,
 };

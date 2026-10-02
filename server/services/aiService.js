@@ -22,10 +22,17 @@ const getAiConfig = async () => {
     };
   } catch {
     return {
-      baseUrl: env.HDM_AI_BASE_URL, apiKey: env.HDM_AI_API_KEY, model: 'groq',
-      landingAiEnabled: true, clientAiEnabled: true, landingSystemPrompt: null,
-      rateLimitEnabled: true, rateLimitMaxRequests: 20, rateLimitWindowMinutes: 15,
-      aiName: 'BizHub Assistant', defaultGreeting: 'Hello! How can I help you today?',
+      baseUrl: env.HDM_AI_BASE_URL,
+      apiKey: env.HDM_AI_API_KEY,
+      model: 'groq',
+      landingAiEnabled: true,
+      clientAiEnabled: true,
+      landingSystemPrompt: null,
+      rateLimitEnabled: true,
+      rateLimitMaxRequests: 20,
+      rateLimitWindowMinutes: 15,
+      aiName: 'BizHub Assistant',
+      defaultGreeting: 'Hello! How can I help you today?',
     };
   }
 };
@@ -50,7 +57,7 @@ const buildLandingPrompt = async () => {
     const trialDays = s.trial_days || '14';
     const currency = s.default_currency || 'KES';
 
-    const modulesList = landingModules?.items?.map(m => `- ${m.title}: ${m.description}`).join('\n') || 
+    const modulesList = landingModules?.items?.map(m => `- ${m.title}: ${m.description}`).join('\n') ||
       `1. RestoManagerKE - Restaurant management (POS, menu, tables, orders, kitchen, inventory)
 2. PharmaSys - Pharmacy management (inventory, prescriptions, POS, supplier orders, expiry tracking)
 3. MyApartment - Property rental management (tenants, leases, rent collection, maintenance)
@@ -99,12 +106,45 @@ const getLandingPrompt = async () => {
   return cachedPrompt;
 };
 
+/**
+ * Call HDM AI.
+ * Endpoint: POST {baseUrl}/completion
+ * Body: { message, system_prompt }
+ * Response: { success, data: { reply, model, tokens_used, provider } }
+ */
 const callAi = async (message, systemPrompt) => {
   const config = await getAiConfig();
-  if (!config.apiKey) return { success: false, reply: 'AI not configured.', tokensUsed: 0, provider: null };
-  const response = await axios.post(`${config.baseUrl}/projects/general/public-chat`, { message, system_prompt: systemPrompt }, { headers: { 'Authorization': `Bearer ${config.apiKey}`, 'Content-Type': 'application/json' }, timeout: 15000 });
-  const { success, data } = response.data;
-  return { success: success || true, reply: data?.reply || 'I am unable to assist.', tokensUsed: data?.tokens_used || 0, provider: data?.provider || config.model };
+
+  if (!config.apiKey) {
+    return { success: false, reply: 'AI not configured.', tokensUsed: 0, provider: null };
+  }
+  if (!config.baseUrl) {
+    return { success: false, reply: 'AI not configured.', tokensUsed: 0, provider: null };
+  }
+
+  const url = `${config.baseUrl.replace(/\/$/, '')}/completion`;
+
+  const response = await axios.post(
+    url,
+    { message, system_prompt: systemPrompt },
+    {
+      headers: {
+        'Authorization': `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 15000,
+    }
+  );
+
+  const body = response.data || {};
+  const { success, data } = body;
+
+  return {
+    success: success !== false,
+    reply: data?.reply || 'I am unable to assist.',
+    tokensUsed: data?.tokens_used || 0,
+    provider: data?.provider || data?.model || config.model,
+  };
 };
 
 const getClientSystemPrompt = (businessType, businessName, context) => {
@@ -121,25 +161,37 @@ const getClientSystemPrompt = (businessType, businessName, context) => {
 const landingChat = async (message) => {
   try {
     const config = await getAiConfig();
-    if (!config.landingAiEnabled) return { success: false, reply: 'AI assistant is currently unavailable.', tokensUsed: 0, provider: null };
+    if (!config.landingAiEnabled) {
+      return { success: false, reply: 'AI assistant is currently unavailable.', tokensUsed: 0, provider: null };
+    }
     const systemPrompt = config.landingSystemPrompt || await getLandingPrompt();
     return await callAi(message, systemPrompt);
-  } catch (error) { logger.error('Landing AI error:', error.response?.data || error.message); return { success: false, reply: 'Sorry, I am having trouble responding.', tokensUsed: 0, provider: null }; }
+  } catch (error) {
+    logger.error('Landing AI error:', error.response?.data || error.message);
+    return { success: false, reply: 'Sorry, I am having trouble responding.', tokensUsed: 0, provider: null };
+  }
 };
 
 const clientChat = async ({ businessType, businessName, message, context }) => {
   try {
     const config = await getAiConfig();
-    if (!config.clientAiEnabled) return { success: false, reply: 'AI assistant is currently unavailable.', tokensUsed: 0, provider: null };
+    if (!config.clientAiEnabled) {
+      return { success: false, reply: 'AI assistant is currently unavailable.', tokensUsed: 0, provider: null };
+    }
     return await callAi(message, getClientSystemPrompt(businessType, businessName, context));
-  } catch (error) { logger.error('Client AI error:', error.response?.data || error.message); return { success: false, reply: 'Sorry, I am having trouble responding.', tokensUsed: 0, provider: null }; }
+  } catch (error) {
+    logger.error('Client AI error:', error.response?.data || error.message);
+    return { success: false, reply: 'Sorry, I am having trouble responding.', tokensUsed: 0, provider: null };
+  }
 };
 
 const generateSupportResponse = async ({ ticketSubject, ticketMessage, businessType, businessName }) => {
   try {
     const systemPrompt = `You are a support agent for BizHub. Customer uses ${businessType} module. Business: ${businessName}. Provide a helpful response.`;
     return await callAi(`Subject: ${ticketSubject}\n\nMessage: ${ticketMessage}`, systemPrompt);
-  } catch (error) { return { success: false, reply: 'A support agent will respond shortly.', tokensUsed: 0 }; }
+  } catch (error) {
+    return { success: false, reply: 'A support agent will respond shortly.', tokensUsed: 0 };
+  }
 };
 
 module.exports = { landingChat, clientChat, generateSupportResponse };

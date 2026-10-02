@@ -1,6 +1,6 @@
 const router = require('express').Router();
-const { renew } = require('../../controllers/public/renewalController');
+const ctrl = require('../../controllers/public/renewalController');
 
-router.post('/', renew);
+router.post('/', ctrl.renew);
 
 module.exports = router;

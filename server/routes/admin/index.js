@@ -19,5 +19,7 @@ router.use('/legal', require('./legalRoutes'));
 router.use('/backups', require('./backupRoutes'));
 router.use('/communication', require('./communicationRoutes'));
 router.use('/payment-methods', require('./paymentMethodRoutes'));
+router.use('/downloads', require('./downloadRoutes'));
+router.use('/health', require('./healthRoutes'));
 
 module.exports = router;

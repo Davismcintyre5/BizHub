@@ -1,6 +1,7 @@
 const router = require('express').Router();
-const { mpesaCallback } = require('../../controllers/public/webhookController');
+const ctrl = require('../../controllers/public/webhookController');
 
-router.post('/mpesa', mpesaCallback);
+router.post('/mpesa', ctrl.mpesaCallback);
+router.post('/mpesa/timeout', ctrl.mpesaTimeout);
 
 module.exports = router;

@@ -1,77 +1,288 @@
-const Subscription = require('../../models/admin/Subscription');
+const Payment = require('../../models/admin/Payment');
+const Invoice = require('../../models/admin/Invoice');
 const Tenant = require('../../models/admin/Tenant');
-const AuditLog = require('../../models/admin/AuditLog');
-const asyncHandler = require('../../utils/asyncHandler');
-const { sendSuccess } = require('../../utils/response');
+const PendingApproval = require('../../models/admin/PendingApproval');
+const Admin = require('../../models/admin/Admin');
 const mpesaService = require('../../services/mpesaService');
 const emailService = require('../../services/emailService');
 const smsService = require('../../services/smsService');
-const { generateReceiptNo } = require('../../utils/generateId');
-const { formatDate } = require('../../utils/formatters');
+const auditService = require('../../utils/auditService');
+const asyncHandler = require('../../utils/asyncHandler');
 const logger = require('../../utils/logger');
 
-const mpesaCallback = asyncHandler(async (req, res) => {
-  logger.info('M-Pesa callback received:', JSON.stringify(req.body));
+const USER_MODEL_MAP = {
+    restaurant: '../../models/resto/User',
+    pharmacy: '../../models/pharma/User',
+    apartment: '../../models/apartment/User',
+    electronics: '../../models/electro/User',
+    cyber: '../../models/cyber/User',
+};
 
-  const result = mpesaService.processCallback(req.body);
+const getUserModel = (businessType) => {
+    const path = USER_MODEL_MAP[businessType];
+    if (!path) return null;
+    return require(path);
+};
 
-  if (result.success) {
-    const subscription = await Subscription.findOne({
-      'paymentDetails.checkoutRequestId': result.checkoutRequestId,
-    }).populate('tenantId');
+const getClientIp = (req) => {
+    const forwarded = req.headers['x-forwarded-for'];
+    if (forwarded) return String(forwarded).split(',')[0].trim();
+    return (req.ip || req.connection?.remoteAddress || '').replace('::ffff:', '');
+};
 
-    if (subscription) {
-      subscription.status = 'active';
-      subscription.paymentDetails.transactionId = result.mpesaReceiptNumber;
-      subscription.paymentDetails.mpesaReceiptNumber = result.mpesaReceiptNumber;
-      subscription.paymentDetails.phone = result.phoneNumber;
-      subscription.paymentDetails.amount = result.amount;
-      subscription.paymentDetails.date = new Date();
-      await subscription.save();
-
-      const tenant = subscription.tenantId;
-      if (tenant) {
-        const receiptNo = generateReceiptNo(tenant.businessType, Date.now());
-
-        if (tenant.contact?.email || tenant.owner?.email) {
-          await emailService.send({
-            to: tenant.contact?.email || tenant.owner.email,
-            subject: `Payment Confirmed - ${tenant.businessName}`,
-            html: require('../../templates/emailTemplates').paymentReceipt({
-              name: tenant.owner.name,
-              businessName: tenant.businessName,
-              receiptNo,
-              amount: result.amount,
-              method: 'M-Pesa',
-              date: formatDate(new Date()),
-            }),
-          });
-        }
-
-        if (tenant.contact?.phone || tenant.owner?.phone) {
-          await smsService.send({
-            to: tenant.contact?.phone || tenant.owner.phone,
-            message: require('../../templates/smsTemplates').paymentConfirmation({
-              amount: result.amount,
-              ref: receiptNo,
-              businessName: tenant.businessName,
-            }),
-          });
-        }
-
-        await AuditLog.create({
-          tenantId: tenant._id,
-          action: 'payment.mpesa_callback',
-          module: 'admin',
-          resource: 'Subscription',
-          resourceId: subscription._id,
-          details: result,
-        });
-      }
+const findInvoiceForPayment = async (payment, checkoutRequestId) => {
+    if (payment.invoice) {
+        const inv = await Invoice.findById(payment.invoice);
+        if (inv) return inv;
     }
-  }
+    return Invoice.findOne({ 'stkLastRequest.checkoutRequestId': checkoutRequestId });
+};
 
-  res.json({ ResultCode: 0, ResultDesc: 'Success' });
+const handleSuccess = async (payment, parsed) => {
+    const invoice = await findInvoiceForPayment(payment, parsed.checkoutRequestId);
+    if (!invoice) {
+        logger.warn('M-Pesa callback: invoice not found', {
+            checkoutRequestId: parsed.checkoutRequestId,
+        });
+        return;
+    }
+
+    if (invoice.status === 'paid') {
+        logger.info('Invoice already paid — skipping', {
+            invoiceNumber: invoice.invoiceNumber,
+        });
+        return;
+    }
+
+    const paidAmount = parsed.amount || invoice.amountDue;
+
+    invoice.status = 'paid';
+    invoice.paymentState = 'paid';
+    invoice.amountPaid = paidAmount;
+    invoice.amountDue = 0;
+    invoice.paidAt = new Date();
+    invoice.paymentMethod = 'mpesa_stk';
+    invoice.paymentRef = parsed.mpesaReceiptNumber || null;
+    await invoice.save();
+
+    const tenant = await Tenant.findById(invoice.tenantId);
+    if (tenant) {
+        tenant.paymentReceived = true;
+        tenant.paymentReceivedAt = new Date();
+        await tenant.save();
+    }
+
+    let user = null;
+    if (tenant) {
+        const User = getUserModel(tenant.businessType);
+        if (User) {
+            try {
+                user = await User.findById(invoice.user);
+                if (user) {
+                    user.scope = 'paid_wait';
+                    user.scopeChangedAt = new Date();
+                    user.scopeReason = 'payment_received';
+                    user.paymentStatus = 'paid';
+                    user.paymentMethod = 'mpesa_stk';
+                    user.paymentReference = parsed.mpesaReceiptNumber || null;
+                    user.paymentDate = new Date();
+                    await user.save();
+                }
+            } catch (err) {
+                logger.error('Failed to update user scope:', err.message);
+            }
+        }
+    }
+
+    await PendingApproval.findOneAndUpdate(
+        { invoice: invoice._id, status: 'pending' },
+        { paymentReceived: true, paymentReceivedAt: new Date() }
+    );
+
+    if (tenant && user) {
+        Promise.resolve().then(async () => {
+            try {
+                await emailService.sendTemplate('tenantPaymentReceived', user.email, {
+                    name: user.name,
+                    businessName: tenant.businessName,
+                    invoiceNumber: invoice.invoiceNumber,
+                    amount: paidAmount,
+                    currency: invoice.currency,
+                    paymentMethod: 'mpesa_stk',
+                    paymentReference: parsed.mpesaReceiptNumber,
+                    paidAt: new Date(),
+                });
+            } catch (err) {
+                logger.error('Payment email failed:', err.message);
+            }
+
+            try {
+                await smsService.sendTemplate('tenantPaymentReceived', user.phone, {
+                    name: user.name,
+                    businessName: tenant.businessName,
+                    invoiceNumber: invoice.invoiceNumber,
+                    amount: paidAmount,
+                });
+            } catch (err) {
+                logger.error('Payment SMS failed:', err.message);
+            }
+        }).catch(() => {});
+
+        Promise.resolve().then(async () => {
+            try {
+                const admins = await Admin.find({ isActive: true }).lean();
+                await Promise.allSettled(admins.map((admin) =>
+                    emailService.sendTemplate('adminPaymentReceived', admin.email, {
+                        businessName: tenant.businessName,
+                        ownerName: tenant.owner?.name || '',
+                        ownerEmail: tenant.owner?.email || '',
+                        ownerPhone: tenant.owner?.phone || '',
+                        planName: tenant.settings?.planName || '',
+                        amount: paidAmount,
+                        currency: invoice.currency,
+                        invoiceNumber: invoice.invoiceNumber,
+                        paymentMethod: 'mpesa_stk',
+                        reference: parsed.mpesaReceiptNumber,
+                    })
+                ));
+            } catch (err) {
+                logger.error('Admin notify failed:', err.message);
+            }
+        }).catch(() => {});
+    }
+
+    await auditService.log({
+        tenantId: invoice.tenantId,
+        userId: invoice.user,
+        userModel: invoice.userModel || null,
+        action: 'payment.received',
+        module: 'admin',
+        resource: 'Invoice',
+        resourceId: invoice._id,
+        details: {
+            invoiceNumber: invoice.invoiceNumber,
+            amount: paidAmount,
+            receipt: parsed.mpesaReceiptNumber,
+            method: 'mpesa_stk',
+        },
+    });
+};
+
+const handleFailure = async (payment, parsed) => {
+    const invoice = await findInvoiceForPayment(payment, parsed.checkoutRequestId);
+    if (!invoice) {
+        logger.warn('M-Pesa callback (failure): invoice not found', {
+            checkoutRequestId: parsed.checkoutRequestId,
+        });
+        return;
+    }
+
+    invoice.paymentState = 'failed';
+    invoice.paymentMethod = 'mpesa_stk';
+    invoice.paymentRef = parsed.resultDesc || 'Failed';
+    await invoice.save();
+};
+
+const processCallback = async (payload, parsed) => {
+    try {
+        const payment = await Payment.findOne({
+            $or: [
+                { checkoutRequestId: parsed.checkoutRequestId },
+                { providerRef: parsed.checkoutRequestId },
+            ],
+        });
+
+        if (!payment) {
+            logger.warn('Payment not found for callback', {
+                checkoutRequestId: parsed.checkoutRequestId,
+            });
+            return;
+        }
+
+        if (payment.status === 'success') {
+            logger.info('Payment already processed', { paymentId: payment._id });
+            return;
+        }
+
+        payment.status = parsed.success ? 'success' : 'failed';
+        payment.providerPayload = payload;
+        if (parsed.success && parsed.mpesaReceiptNumber) {
+            payment.mpesaReceipt = parsed.mpesaReceiptNumber;
+            payment.providerRef = parsed.mpesaReceiptNumber;
+        }
+        await payment.save();
+
+        if (parsed.success) {
+            await handleSuccess(payment, parsed);
+        } else {
+            await handleFailure(payment, parsed);
+        }
+    } catch (err) {
+        logger.error('Callback processing failed', {
+            error: err.message,
+            checkoutRequestId: parsed?.checkoutRequestId,
+        });
+    }
+};
+
+const mpesaCallback = asyncHandler(async (req, res) => {
+    const payload = req.body;
+    const clientIp = getClientIp(req);
+    const checkoutRequestId = payload?.Body?.stkCallback?.CheckoutRequestID;
+
+    logger.info('M-Pesa callback received', {
+        checkoutRequestId,
+        resultCode: payload?.Body?.stkCallback?.ResultCode,
+        ip: clientIp,
+    });
+
+    if (!checkoutRequestId) {
+        logger.warn('Callback without checkoutRequestId — rejecting', { ip: clientIp });
+        return res.status(400).json({ ResultCode: 1, ResultDesc: 'Invalid' });
+    }
+
+    // Authenticity gate: the CheckoutRequestID must match a Payment we
+    // initiated when we sent the STK Push. Anything else is rejected.
+    const known = await Payment.exists({
+        $or: [
+            { checkoutRequestId },
+            { providerRef: checkoutRequestId },
+        ],
+    });
+
+    if (!known) {
+        logger.warn('Callback rejected — unknown CheckoutRequestID', {
+            checkoutRequestId,
+            ip: clientIp,
+        });
+        return res.status(403).json({ ResultCode: 1, ResultDesc: 'Unknown transaction' });
+    }
+
+    // Acknowledge Safaricom immediately (must be < 5s).
+    res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
+
+    if (mpesaService.isDuplicateCallback(checkoutRequestId)) {
+        logger.info('Duplicate callback (memory dedupe)', { checkoutRequestId });
+        return;
+    }
+
+    // Process asynchronously so we don't block Safaricom's HTTP client.
+    setImmediate(() => {
+        processCallback(payload, mpesaService.parseCallback(payload)).catch((err) =>
+            logger.error('processCallback threw', {
+                error: err.message,
+                checkoutRequestId,
+            })
+        );
+    });
 });
 
-module.exports = { mpesaCallback };
+const mpesaTimeout = asyncHandler(async (req, res) => {
+    logger.warn('M-Pesa callback timeout', req.body);
+    return res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
+});
+
+module.exports = {
+    mpesaCallback,
+    mpesaTimeout,
+};

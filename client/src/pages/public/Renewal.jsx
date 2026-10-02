@@ -1,193 +1,378 @@
-import { useState, useEffect } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useEffect, useState, useCallback } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import {
+  HiClock,
+  HiCheckCircle,
+  HiRefresh,
+  HiArrowLeft,
+  HiPhone,
+  HiExclamationCircle,
+} from 'react-icons/hi';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
 import { Spinner } from '../../components/ui/Spinner';
-import { Input } from '../../components/ui/Input';
-import { getPlans } from '../../api/public/plans';
-import { getPaymentMethods } from '../../api/public/site';
-import { formatCurrency } from '../../utils/format';
+import { useAuth } from '../../hooks/useAuth';
 import { useNotification } from '../../hooks/useNotification';
 import api from '../../api/axios';
-import { cn } from '../../utils/cn';
 
-const methodLabels = {
-  momo_stk: 'M-Pesa STK Push',
-  momo_send: 'Send Money',
-  momo_till: 'Till Number',
-  momo_paybill: 'Paybill',
-  stripe: 'Card (Stripe)',
-};
+const formatMoney = (amount, currency = 'KES') =>
+  `${currency} ${Number(amount || 0).toLocaleString('en-KE', { maximumFractionDigits: 2 })}`;
 
-const moduleDisplayNames = {
-  restaurant: 'RestoManagerKE',
-  pharmacy: 'PharmaSys',
-  apartment: 'MyApartment',
-  electronics: 'ElectroStore',
-  cyber: 'DigitalManager',
-};
+const formatDate = (d) =>
+  d
+    ? new Date(d).toLocaleDateString('en-KE', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      })
+    : '—';
 
 export default function Renewal() {
-  const [searchParams] = useSearchParams();
-  const tenantId = searchParams.get('tenant');
-  const module = searchParams.get('module');
   const navigate = useNavigate();
-  const { success, error } = useNotification();
+  const [searchParams] = useSearchParams();
+  const { user, tenant, scope, invoice, isAuthenticated, loading, refreshUser } = useAuth();
+  const { success, error: notifyError } = useNotification();
 
-  const [plans, setPlans] = useState([]);
-  const [methods, setMethods] = useState([]);
-  const [requireProof, setRequireProof] = useState(false);
-  const [selectedPlan, setSelectedPlan] = useState(null);
-  const [selectedMethod, setSelectedMethod] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [processing, setProcessing] = useState(false);
-  const [confirmed, setConfirmed] = useState(false);
-  const [phone, setPhone] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [phone, setPhone] = useState(user?.phone || '');
+  const [payState, setPayState] = useState('idle');
+  const [payError, setPayError] = useState('');
 
-  const user = (() => { try { return JSON.parse(localStorage.getItem('bizhub_user') || '{}'); } catch { return {}; } })();
-  const tenant = {
-    businessName: user?.businessName || 'Your Business',
-    status: 'expired',
-  };
+  const tenantIdFromUrl = searchParams.get('tenant');
 
   useEffect(() => {
-    if (!tenantId || !module) { navigate('/login'); return; }
-    const fetchData = async () => {
-      try {
-        const [plansRes, methodsRes] = await Promise.all([getPlans(), getPaymentMethods()]);
-        setPlans((plansRes?.data || plansRes || []).filter(p => p.cycle !== 'trial'));
-        const methodsData = methodsRes?.data || methodsRes || {};
-        setMethods(methodsData.methods || []);
-        setRequireProof(methodsData.requireProof || false);
-        setPhone(user?.phone || '');
-      } catch (err) { error('Failed to load data'); }
-      setLoading(false);
-    };
-    fetchData();
-  }, [tenantId, module]);
-
-  const getNewExpiryDate = () => {
-    if (!selectedPlan) return '';
-    const now = new Date();
-    switch (selectedPlan.cycle) {
-      case 'monthly': now.setMonth(now.getMonth() + 1); break;
-      case 'yearly': now.setFullYear(now.getFullYear() + 1); break;
-      case 'permanent': return 'Never (Permanent)';
+    if (loading) return;
+    if (!isAuthenticated) {
+      navigate('/login', { replace: true });
+      return;
     }
-    return now.toLocaleDateString('en-KE', { day: 'numeric', month: 'long', year: 'numeric' });
-  };
+    if (scope === 'active') {
+      navigate('/dashboard', { replace: true });
+      return;
+    }
+    if (scope === 'pending' || scope === 'paid_wait') {
+      navigate('/pending', { replace: true });
+    }
+  }, [loading, isAuthenticated, scope, navigate]);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!selectedPlan || !selectedMethod) return;
-    const isManual = ['momo_send', 'momo_till', 'momo_paybill'].includes(selectedMethod.type);
-    if (isManual && !confirmed) return;
-    setProcessing(true);
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const data = await refreshUser();
+      if (data?.scope === 'active') {
+        success('Account renewed!');
+        navigate('/dashboard', { replace: true });
+      } else if (data?.scope === 'paid_wait') {
+        success('Payment received. Awaiting approval.');
+        navigate('/pending', { replace: true });
+      }
+    } catch {
+      notifyError('Failed to refresh status');
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshUser, navigate, success, notifyError]);
+
+  const createRenewalInvoice = async () => {
+    setCreating(true);
     try {
       await api.post('/public/renewal', {
-        tenantId, plan: selectedPlan.slug, planName: selectedPlan.name,
-        planAmount: selectedPlan.price, planCycle: selectedPlan.cycle,
-        paymentMethod: selectedMethod.type, paymentPhone: phone,
+        tenantId: tenantIdFromUrl || tenant?._id || tenant?.id,
+        plan: tenant?.settings?.planName || 'Standard',
+        planName: tenant?.settings?.planName || 'Standard',
+        planAmount: tenant?.settings?.planAmount || 0,
+        planCycle: tenant?.settings?.planCycle || 'monthly',
+        paymentMethod: 'momo_stk',
+        paymentPhone: phone,
       });
-      success('Subscription renewed! Redirecting...');
-      setTimeout(() => navigate('/login'), 2000);
-    } catch (err) { error(err.response?.data?.message || 'Renewal failed'); }
-    setProcessing(false);
+      success('Renewal invoice created');
+      await refresh();
+    } catch (err) {
+      notifyError(err?.response?.data?.message || 'Failed to create renewal');
+    } finally {
+      setCreating(false);
+    }
   };
 
-  const getManualGuide = () => {
-    if (selectedMethod?.type === 'momo_send') return { steps: ['Go to M-Pesa → Send Money', `Enter: ${selectedMethod.number||'N/A'}`, `Amount: KSh ${selectedPlan?.price?.toLocaleString()||0}`, 'Enter PIN and send', 'Confirm below'], title: 'Send Money' };
-    if (selectedMethod?.type === 'momo_till') return { steps: ['Go to M-Pesa → Lipa Na M-Pesa → Buy Goods', `Till: ${selectedMethod.number||'N/A'}`, `Amount: KSh ${selectedPlan?.price?.toLocaleString()||0}`, 'Enter PIN and send', 'Confirm below'], title: 'Till Number' };
-    if (selectedMethod?.type === 'momo_paybill') return { steps: ['Go to M-Pesa → Lipa Na M-Pesa → Paybill', `Business: ${selectedMethod.business||'N/A'}`, `Account: ${selectedMethod.account||'N/A'}`, `Amount: KSh ${selectedPlan?.price?.toLocaleString()||0}`, 'Enter PIN and send', 'Confirm below'], title: 'Paybill' };
-    return null;
+  const handlePay = async () => {
+    setPayError('');
+    if (!phone || phone.length < 10) {
+      setPayError('Enter a valid phone number');
+      return;
+    }
+    if (!invoice?.invoiceNumber) {
+      setPayError('No invoice found');
+      return;
+    }
+
+    setPayState('sending');
+    try {
+      const res = await api.post('/public/payment/stk', {
+        invoiceNumber: invoice.invoiceNumber,
+        phone,
+      });
+      const payload = res?.data?.data || res?.data || res;
+      if (payload?.checkoutRequestId) {
+        setPayState('waiting');
+        success('Payment request sent. Check your phone.');
+        setTimeout(() => {
+          refresh();
+          setPayState('idle');
+        }, 15000);
+      } else {
+        setPayState('idle');
+        setPayError('Failed to send payment request');
+      }
+    } catch (err) {
+      setPayState('idle');
+      const msg = err?.response?.data?.message || err.message || 'Payment failed';
+      setPayError(msg);
+      notifyError(msg);
+    }
   };
 
-  const manualGuide = getManualGuide();
-  const isManual = ['momo_send', 'momo_till', 'momo_paybill'].includes(selectedMethod?.type);
-  const isStk = selectedMethod?.type === 'momo_stk';
+  if (loading) {
+    return (
+      <div className="flex justify-center py-20">
+        <Spinner size="lg" />
+      </div>
+    );
+  }
 
-  if (loading) return <div className="flex justify-center py-20"><Spinner size="lg" /></div>;
+  const invoiceIsPaid = invoice?.status === 'paid' || invoice?.paymentState === 'paid';
+  const hasPendingInvoice = invoice && !invoiceIsPaid && scope === 'expired';
+  const isLifetime =
+    !tenant?.settings?.planCycle || tenant?.settings?.planCycle === 'permanent';
+  const hasActiveSubscription = scope === 'active' && !hasPendingInvoice;
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-12">
-      <div className="text-center mb-8">
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Renew Subscription</h1>
-        <p className="text-gray-500 dark:text-gray-400 mt-2">{moduleDisplayNames[module] || module} — {tenant.businessName}</p>
-      </div>
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 py-12 px-4">
+      <div className="max-w-lg mx-auto">
+        <Link
+          to="/login"
+          className="inline-flex items-center gap-1 text-sm text-gray-500 dark:text-gray-400 hover:text-primary-600 mb-6"
+        >
+          <HiArrowLeft className="w-4 h-4" /> Back
+        </Link>
 
-      <Card className="mb-6">
-        <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Subscription Status</h3>
-        <Badge color="red">Expired</Badge>
-        <p className="text-sm text-gray-500 mt-2">Your subscription has expired. Choose a new plan below to reactivate.</p>
-      </Card>
+        <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-6">
+          Renew Subscription
+        </h1>
 
-      <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Choose New Plan</h3>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
-        {plans.map(plan => (
-          <Card key={plan._id} hover onClick={() => { setSelectedPlan(plan); setSelectedMethod(null); setConfirmed(false); }}
-            className={cn('cursor-pointer text-center', selectedPlan?.slug === plan.slug && 'ring-2 ring-primary-500')}>
-            <h4 className="font-bold text-gray-900 dark:text-white">{plan.name}</h4>
-            <Badge className="mt-1 capitalize">{plan.cycle}</Badge>
-            <p className="text-2xl font-extrabold text-gray-900 dark:text-white mt-2">{formatCurrency(plan.price)}</p>
-          </Card>
-        ))}
-      </div>
-
-      {selectedPlan && (
-        <>
-          <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Payment Method</h3>
-          <div className="space-y-2 mb-6">
-            {methods.map(method => (
-              <Card key={method.type} hover onClick={() => { setSelectedMethod(method); setConfirmed(false); }}
-                className={cn('cursor-pointer', selectedMethod?.type === method.type && 'ring-2 ring-primary-500')}>
-                <p className="text-sm font-medium text-gray-900 dark:text-white">{methodLabels[method.type] || method.name}</p>
-                {method.number && <p className="text-xs text-gray-500 mt-1">Number: {method.number}</p>}
-                {method.business && <p className="text-xs text-gray-500 mt-1">Business: {method.business} | Acc: {method.account}</p>}
-              </Card>
-            ))}
-          </div>
-        </>
-      )}
-
-      {selectedMethod && (
-        <form onSubmit={handleSubmit}>
-          {isStk && <div className="mb-4"><Input label="M-Pesa Phone Number" value={phone} onChange={e => setPhone(e.target.value)} placeholder="2547XXXXXXXX" /></div>}
-          {isManual && manualGuide && (
-            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-5 mb-4">
-              <h4 className="font-semibold text-blue-800 dark:text-blue-300 mb-3">{manualGuide.title}</h4>
-              <ol className="space-y-2">{manualGuide.steps.map((step, i) => <li key={i} className="flex gap-3 text-sm text-blue-700 dark:text-blue-400"><span className="font-bold">{i+1}.</span><span>{step}</span></li>)}</ol>
+        {/* ACTIVE — You're all set */}
+        {hasActiveSubscription && (
+          <Card>
+            <div className="text-center py-8">
+              <div className="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                <HiCheckCircle className="w-10 h-10 text-green-600" />
+              </div>
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
+                You're All Set!
+              </h2>
+              <div className="text-sm text-gray-600 dark:text-gray-400 space-y-2">
+                <p>
+                  Plan: <strong>{tenant?.settings?.planName || 'Standard'}</strong>
+                </p>
+                {tenant?.settings?.planCycle && (
+                  <p>
+                    Cycle: <strong>{tenant.settings.planCycle}</strong>
+                  </p>
+                )}
+              </div>
+              <Button className="mt-6" onClick={() => navigate('/dashboard')}>
+                Go to Dashboard
+              </Button>
             </div>
-          )}
-          {isManual && (
-            <>
-              <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-4">
-                <p className="text-sm text-yellow-700 dark:text-yellow-400 font-medium">⚠️ Complete payment before submitting.</p>
+          </Card>
+        )}
+
+        {/* LIFETIME — No renewal needed */}
+        {isLifetime && !hasActiveSubscription && !hasPendingInvoice && (
+          <Card>
+            <div className="text-center py-8">
+              <div className="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                <HiCheckCircle className="w-10 h-10 text-green-600" />
               </div>
-              <div className="mb-4">
-                <label className="flex items-start gap-3 cursor-pointer">
-                  <input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} className="mt-1 rounded border-gray-300 dark:border-gray-600 text-primary-600" />
-                  <span className="text-sm text-gray-700 dark:text-gray-300">I confirm payment of <strong>KSh {selectedPlan?.price?.toLocaleString()}</strong>.</span>
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
+                Lifetime Plan
+              </h2>
+              <p className="text-gray-500 dark:text-gray-400">
+                Your plan is lifetime. No renewal needed.
+              </p>
+              <Button className="mt-4" onClick={() => navigate('/dashboard')}>
+                Go to Dashboard
+              </Button>
+            </div>
+          </Card>
+        )}
+
+        {/* PENDING INVOICE — Pay now */}
+        {hasPendingInvoice && (
+          <>
+            <Card className="mb-6">
+              <div className="flex items-start gap-3 p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-xl mb-4">
+                <HiClock className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-semibold text-yellow-700 dark:text-yellow-300">
+                    Renewal in progress
+                  </p>
+                  <p className="text-xs text-yellow-600 dark:text-yellow-400">
+                    Pay the invoice below to reactivate your account.
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-2 text-sm mb-4">
+                <Row label="Business" value={tenant?.businessName || '—'} />
+                <Row label="Plan" value={tenant?.settings?.planName || 'Standard'} />
+                <Row label="Invoice" value={invoice.invoiceNumber} mono />
+                <Row
+                  label="Amount"
+                  value={formatMoney(invoice.amountDue, invoice.currency || 'KES')}
+                  bold
+                />
+                {invoice.dueDate && <Row label="Due" value={formatDate(invoice.dueDate)} />}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">
+                  M-Pesa Phone
                 </label>
+                <input
+                  type="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="254712345678"
+                  className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
               </div>
-            </>
-          )}
-          {selectedPlan && (
-            <Card className="mb-4">
-              <h4 className="font-semibold text-gray-900 dark:text-white mb-2">Summary</h4>
-              <div className="text-sm space-y-1">
-                <p className="text-gray-500">New Plan: <strong className="text-gray-900 dark:text-white">{selectedPlan.name}</strong></p>
-                <p className="text-gray-500">Amount: <strong className="text-gray-900 dark:text-white">{formatCurrency(selectedPlan.price)}</strong></p>
-                <p className="text-gray-500">New Expiry: <strong className="text-gray-900 dark:text-white">{getNewExpiryDate()}</strong></p>
-              </div>
+
+              {payError && (
+                <p className="text-sm text-red-600 dark:text-red-400 mt-2">{payError}</p>
+              )}
+
+              <Button
+                onClick={handlePay}
+                loading={payState === 'sending' || payState === 'waiting'}
+                className="w-full mt-4"
+                size="lg"
+              >
+                <HiPhone className="w-4 h-4" />
+                {payState === 'waiting'
+                  ? 'Waiting for payment...'
+                  : `Pay ${formatMoney(invoice.amountDue, invoice.currency || 'KES')} with M-Pesa`}
+              </Button>
+
+              <Button
+                variant="ghost"
+                onClick={refresh}
+                loading={refreshing}
+                className="w-full mt-2"
+              >
+                <HiRefresh className="w-4 h-4" /> Check Status
+              </Button>
             </Card>
-          )}
-          <div className="flex gap-3">
-            <Button variant="secondary" onClick={() => navigate('/login')}>Cancel</Button>
-            <Button type="submit" loading={processing} disabled={!selectedMethod || (isManual && !confirmed)} className="flex-1">Renew Now</Button>
-          </div>
-        </form>
-      )}
+
+            {Array.isArray(invoice.paymentInstructions) &&
+              invoice.paymentInstructions.filter((p) => p.code !== 'mpesa_stk').length > 0 && (
+                <Card>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">
+                    Other payment methods
+                  </p>
+                  <div className="space-y-2">
+                    {invoice.paymentInstructions
+                      .filter((p) => p.code !== 'mpesa_stk')
+                      .map((p, i) => (
+                        <div
+                          key={i}
+                          className="rounded-lg border border-gray-200 dark:border-gray-700 p-3"
+                        >
+                          <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                            {p.title}
+                          </p>
+                          {p.description && (
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                              {p.description}
+                            </p>
+                          )}
+                          {Array.isArray(p.steps) && p.steps.length > 0 && (
+                            <ol className="text-xs text-gray-600 dark:text-gray-400 mt-2 space-y-1 list-decimal list-inside">
+                              {p.steps.map((s, j) => (
+                                <li key={j}>{s}</li>
+                              ))}
+                            </ol>
+                          )}
+                        </div>
+                      ))}
+                  </div>
+                </Card>
+              )}
+          </>
+        )}
+
+        {/* EXPIRED, NO INVOICE — Create renewal */}
+        {!hasActiveSubscription && !isLifetime && !hasPendingInvoice && (
+          <Card>
+            <div className="flex items-start gap-3 p-3 bg-red-50 dark:bg-red-900/20 rounded-xl mb-4">
+              <HiExclamationCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-red-700 dark:text-red-300">
+                  Your subscription has expired
+                </p>
+                <p className="text-xs text-red-600 dark:text-red-400">
+                  Renew to regain access to your account.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-2 mt-4">
+              <Row label="Business" value={tenant?.businessName || '—'} />
+              <Row label="Plan" value={tenant?.settings?.planName || 'Standard'} />
+              <Row
+                label="Amount"
+                value={formatMoney(tenant?.settings?.planAmount || 0)}
+                bold
+              />
+            </div>
+
+            <Button
+              onClick={createRenewalInvoice}
+              loading={creating}
+              className="w-full mt-6"
+              size="lg"
+            >
+              <HiRefresh className="w-4 h-4" /> Create Renewal Invoice
+            </Button>
+
+            <p className="text-xs text-gray-400 text-center mt-3">
+              You'll be able to pay by M-Pesa on the next step.
+            </p>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, value, bold, mono }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="shrink-0 text-gray-500 dark:text-gray-400">{label}</span>
+      <span
+        className={[
+          'text-right',
+          bold
+            ? 'font-semibold text-gray-900 dark:text-gray-100'
+            : 'text-gray-900 dark:text-gray-100',
+          mono ? 'font-mono text-xs' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+      >
+        {value}
+      </span>
     </div>
   );
 }

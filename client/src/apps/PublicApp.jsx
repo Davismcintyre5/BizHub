@@ -1,13 +1,15 @@
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { PublicLayout } from '../components/public/layout/PublicLayout';
 import Home from '../pages/public/Home';
 import Register from '../pages/public/Register';
 import Login from '../pages/public/Login';
 import ForgotPassword from '../pages/public/ForgotPassword';
 import ResetPassword from '../pages/public/ResetPassword';
-import Pricing from '../pages/public/Pricing';
-import Checkout from '../pages/public/Checkout';
+import Pending from '../pages/public/Pending';
+import Invoice from '../pages/public/Invoice';
 import Renewal from '../pages/public/Renewal';
+import VerifyEmail from '../pages/public/VerifyEmail';
+import Pricing from '../pages/public/Pricing';
 import ModuleDetail from '../pages/public/ModuleDetail';
 import Contact from '../pages/public/Contact';
 import Demo from '../pages/public/Demo';
@@ -28,9 +30,13 @@ export default function PublicApp() {
         <Route path="login" element={<Login />} />
         <Route path="forgot-password" element={<ForgotPassword />} />
         <Route path="reset-password" element={<ResetPassword />} />
-        <Route path="pricing" element={<Pricing />} />
-        <Route path="checkout" element={<Checkout />} />
+
+        <Route path="pending" element={<Pending />} />
+        <Route path="invoice/:invoiceNumber" element={<Invoice />} />
         <Route path="renewal" element={<Renewal />} />
+        <Route path="verify-email" element={<VerifyEmail />} />
+
+        <Route path="pricing" element={<Pricing />} />
         <Route path="modules/:slug" element={<ModuleDetail />} />
         <Route path="contact" element={<Contact />} />
         <Route path="demo" element={<Demo />} />
@@ -40,6 +46,9 @@ export default function PublicApp() {
         <Route path="privacy" element={<Privacy />} />
         <Route path="refund" element={<Refund />} />
         <Route path="maintenance" element={<Maintenance />} />
+
+        <Route path="checkout" element={<Navigate to="/pricing" replace />} />
+
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>

@@ -7,6 +7,7 @@ router.use(auth, subscriptionCheck);
 router.get('/', ctrl.getAll);
 router.get('/:id', ctrl.getById);
 router.post('/', ctrl.create);
-router.put('/:id/status', ctrl.updateStatus);
+router.post('/:id/send', ctrl.sendToSupplier);
+router.post('/:id/receive', ctrl.receive);
 
 module.exports = router;

@@ -1,269 +1,340 @@
+const mongoose = require('mongoose');
 const Tenant = require('../../models/admin/Tenant');
+const PendingApproval = require('../../models/admin/PendingApproval');
+const Admin = require('../../models/admin/Admin');
 const Settings = require('../../models/admin/Settings');
-const AuditLog = require('../../models/admin/AuditLog');
-const asyncHandler = require('../../utils/asyncHandler');
-const { sendSuccess } = require('../../utils/response');
-const ApiError = require('../../utils/ApiError');
-const { generateTenantSlug } = require('../../utils/generateId');
+const invoiceService = require('../../services/invoiceService');
+const planService = require('../../services/planService');
 const emailService = require('../../services/emailService');
 const smsService = require('../../services/smsService');
-const Admin = require('../../models/admin/Admin');
+const auditService = require('../../utils/auditService');
+const jwt = require('../../utils/jwt');
+const asyncHandler = require('../../utils/asyncHandler');
+const { sendSuccess, sendError } = require('../../utils/response');
+const ApiError = require('../../utils/ApiError');
+const { generateTenantSlug } = require('../../utils/generateId');
+const logger = require('../../utils/logger');
 
-const MODULES_LIST = [
-  { type: 'restaurant', name: 'RestoManagerKE' },
-  { type: 'pharmacy', name: 'PharmaSys' },
-  { type: 'apartment', name: 'MyApartment' },
-  { type: 'electronics', name: 'ElectroStore' },
-  { type: 'cyber', name: 'DigitalManager' },
-];
-
-const paymentLabels = {
-  momo_stk: 'M-Pesa STK Push',
-  momo_send: 'Send Money',
-  momo_till: 'Till Number',
-  momo_paybill: 'Paybill',
-  stripe: 'Card (Stripe)',
-  manual: 'Manual',
+const USER_MODEL_MAP = {
+    restaurant: { model: 'RestoUser', path: '../../models/resto/User' },
+    pharmacy: { model: 'PharmaUser', path: '../../models/pharma/User' },
+    apartment: { model: 'ApartmentUser', path: '../../models/apartment/User' },
+    electronics: { model: 'ElectroUser', path: '../../models/electro/User' },
+    cyber: { model: 'CyberUser', path: '../../models/cyber/User' },
 };
 
-const modelNames = {
-  restaurant: 'RestoUser',
-  pharmacy: 'PharmaUser',
-  apartment: 'ApartmentUser',
-  electronics: 'ElectroUser',
-  cyber: 'CyberUser',
+const MODULE_KEY_MAP = {
+    restaurant: 'resto',
+    pharmacy: 'pharma',
+    apartment: 'apartment',
+    electronics: 'electro',
+    cyber: 'cyber',
 };
 
 const getUserModel = (businessType) => {
-  const models = {
-    restaurant: require('../../models/resto/User'),
-    pharmacy: require('../../models/pharma/User'),
-    apartment: require('../../models/apartment/User'),
-    electronics: require('../../models/electro/User'),
-    cyber: require('../../models/cyber/User'),
-  };
-  return models[businessType];
+    const entry = USER_MODEL_MAP[businessType];
+    if (!entry) throw new ApiError(400, `Invalid business type: ${businessType}`);
+    return require(entry.path);
 };
 
-const formatDate = (date) => {
-  return date.toLocaleDateString('en-KE', { day: 'numeric', month: 'long', year: 'numeric' });
+const getUserModelName = (businessType) => {
+    const entry = USER_MODEL_MAP[businessType];
+    return entry ? entry.model : 'User';
+};
+
+const normalizePhone = (phone) => {
+    if (!phone) return null;
+    let p = String(phone).replace(/\D/g, '');
+    if (p.startsWith('0')) p = `254${p.slice(1)}`;
+    if (!p.startsWith('254') && p.length === 9) p = `254${p}`;
+    return p;
 };
 
 const register = asyncHandler(async (req, res) => {
-  const { businessName, businessType, owner, contact, password } = req.body;
-  if (!businessName || !businessType || !owner || !password) {
-    throw new ApiError(400, 'Business name, type, owner details, and password required');
-  }
+    const {
+        businessName, businessType, owner, contact, password,
+        plan, planName: planFromBody,
+    } = req.body;
 
-  const validTypes = ['restaurant', 'pharmacy', 'apartment', 'electronics', 'cyber'];
-  if (!validTypes.includes(businessType)) {
-    throw new ApiError(400, `Invalid business type. Must be: ${validTypes.join(', ')}`);
-  }
+    const planRequested = plan || planFromBody;
 
-  const moduleKeyMap = {
-    restaurant: 'module_resto',
-    pharmacy: 'module_pharma',
-    apartment: 'module_apartment',
-    electronics: 'module_electro',
-    cyber: 'module_cyber',
-  };
+    if (!businessName || !businessType || !owner || !password) {
+        return sendError(res, 'Business name, type, owner, and password are required', 400);
+    }
 
-  const flagKey = moduleKeyMap[businessType];
-  const moduleFlag = await Settings.findOne({ key: flagKey, category: 'features' });
+    const validTypes = ['restaurant', 'pharmacy', 'apartment', 'electronics', 'cyber'];
+    if (!validTypes.includes(businessType)) {
+        return sendError(res, `Invalid business type. Must be one of: ${validTypes.join(', ')}`, 400);
+    }
 
-  if (moduleFlag && moduleFlag.value === 'false') {
-    throw new ApiError(400, `${businessType} module is currently unavailable`, 'MODULE_UNAVAILABLE');
-  }
+    if (!planRequested) {
+        return sendError(res, 'Plan is required', 400);
+    }
 
-  const existingTenant = await Tenant.findOne({
-    businessType,
-    $or: [
-      { 'owner.email': owner.email },
-      { 'owner.phone': owner.phone },
-    ],
-  });
+    const settings = await Settings.findOne().lean();
+    if (settings?.allowSelfRegistration === false) {
+        return sendError(res, 'Registration is currently closed', 403);
+    }
 
-  if (existingTenant) {
-    throw new ApiError(409, `You already have a ${businessType} business registered.`, 'DUPLICATE_MODULE');
-  }
+    const moduleKey = MODULE_KEY_MAP[businessType];
+    const flagKey = `module_${moduleKey}`;
+    const moduleFlag = await Settings.findOne({ key: flagKey, category: 'features' }).lean();
+    if (moduleFlag && moduleFlag.value === 'false') {
+        return sendError(res, `${businessType} module is currently unavailable`, 400);
+    }
 
-  const slug = generateTenantSlug(businessName);
-  const isTrial = req.body.isTrial === true;
-  const tenantStatus = isTrial ? 'trial' : 'pending';
-  const planName = req.body.planName || 'Pending';
-  const planAmount = req.body.planAmount || 0;
-  const planCycle = req.body.planCycle || 'monthly';
-  const paymentMethod = req.body.paymentMethod || 'manual';
-  const paymentMethodLabel = paymentLabels[paymentMethod] || paymentMethod;
-  const paymentPhone = req.body.paymentPhone || owner.phone;
-  const moduleName = MODULES_LIST.find(m => m.type === businessType)?.name || businessType;
+    const existing = await Tenant.findOne({
+        businessType,
+        $or: [
+            { 'owner.email': owner.email },
+            { 'owner.phone': owner.phone },
+        ],
+    });
+    if (existing) {
+        return sendError(res, `You already have a ${businessType} business registered`, 409);
+    }
 
-  const tenant = await Tenant.create({
-    businessName,
-    slug,
-    businessType,
-    owner,
-    contact: contact || owner,
-    status: tenantStatus,
-    settings: {
-      currency: 'KES',
-      timezone: 'Africa/Nairobi',
-      dateFormat: 'DD/MM/YYYY',
-      planName,
-      planAmount,
-      planCycle,
-      paymentMethod,
-    },
-  });
+    const planDoc = await planService.getByName(planRequested);
+    if (!planDoc) {
+        return sendError(res, 'Invalid plan', 400);
+    }
 
-  const User = getUserModel(businessType);
-  const user = await User.create({
-    tenantId: tenant._id,
-    name: owner.name,
-    email: owner.email,
-    phone: owner.phone,
-    password,
-    role: 'owner',
-    permissions: ['all'],
-    isActive: true,
-  });
+    const slug = generateTenantSlug(businessName);
+    const User = getUserModel(businessType);
+    const userModelName = getUserModelName(businessType);
+    const normalizedPhone = normalizePhone(owner.phone);
 
-  await AuditLog.create({
-    tenantId: tenant._id,
-    userId: user._id,
-    userModel: modelNames[businessType],
-    action: isTrial ? 'tenant.trial_started' : 'tenant.registered',
-    module: 'admin',
-    resource: 'Tenant',
-    resourceId: tenant._id,
-    details: { businessName, businessType, isTrial, planName, planAmount, planCycle, paymentMethod },
-  });
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-  if (isTrial) {
-    const Subscription = require('../../models/admin/Subscription');
-    const Module = require('../../models/admin/Module');
+    let tenant, user, invoice, pendingApproval;
 
-    const startDate = new Date();
-    const trialEnd = new Date();
-    trialEnd.setDate(trialEnd.getDate() + 14);
+    try {
+        [tenant] = await Tenant.create([{
+            businessName,
+            slug,
+            businessType,
+            owner: {
+                name: owner.name,
+                email: owner.email,
+                phone: normalizedPhone,
+            },
+            contact: contact || {
+                email: owner.email,
+                phone: normalizedPhone,
+            },
+            status: 'pending',
+            paymentReceived: false,
+            settings: {
+                currency: 'KES',
+                timezone: 'Africa/Nairobi',
+                dateFormat: 'DD/MM/YYYY',
+                planName: planDoc.name,
+                planAmount: planDoc.price,
+                planCycle: planDoc.cycle,
+            },
+        }], { session });
 
-    await Subscription.create({
-      tenantId: tenant._id,
-      plan: 'trial',
-      amount: 0,
-      currency: 'KES',
-      startDate,
-      endDate: trialEnd,
-      status: 'active',
-      paymentDetails: { method: 'trial' },
+        [user] = await User.create([{
+            tenantId: tenant._id,
+            name: owner.name,
+            email: owner.email,
+            phone: normalizedPhone,
+            password,
+            role: 'owner',
+            permissions: ['all'],
+            isActive: false,
+            scope: 'pending',
+        }], { session });
+
+        const invResult = await invoiceService.generateInvoice({
+            tenantId: tenant._id,
+            userId: user._id,
+            userModel: userModelName,
+            user: { name: owner.name, email: owner.email, phone: normalizedPhone },
+            plan: planDoc.name,
+            planPrice: planDoc.price,
+            planInterval: planDoc.cycle,
+            planDoc,
+            type: 'registration',
+        });
+        invoice = invResult.invoice;
+
+        const expiresAt = new Date(Date.now() + 3 * 60 * 60 * 1000);
+
+        [pendingApproval] = await PendingApproval.create([{
+            tenantId: tenant._id,
+            userId: user._id,
+            userModel: userModelName,
+            type: 'registration',
+            status: 'pending',
+            plan: planDoc.name,
+            planCycle: planDoc.cycle,
+            amount: planDoc.price,
+            currency: 'KES',
+            invoice: invoice._id,
+            expiresAt,
+        }], { session });
+
+        await session.commitTransaction();
+    } catch (err) {
+        await session.abortTransaction();
+        logger.error('Registration failed:', err);
+        throw err;
+    } finally {
+        session.endSession();
+    }
+
+    const moduleDisplayName = {
+        restaurant: 'RestoManagerKE',
+        pharmacy: 'PharmaSys',
+        apartment: 'MyApartment',
+        electronics: 'ElectroStore',
+        cyber: 'DigitalManager',
+    }[businessType];
+
+    const invoiceUrl = `${process.env.CLIENT_URL || 'http://localhost:3000'}/invoice/${invoice.invoiceNumber}`;
+
+    Promise.resolve().then(async () => {
+        try {
+            await emailService.sendTemplate('tenantRegistrationPending', owner.email, {
+                name: owner.name,
+                businessName,
+                businessType,
+                planName: planDoc.name,
+                planAmount: planDoc.price,
+                invoiceNumber: invoice.invoiceNumber,
+                dueDate: invoice.dueDate,
+                paymentInstructions: invoice.paymentInstructions || [],
+                invoiceUrl,
+            });
+        } catch (err) {
+            logger.error('Registration email failed:', err.message);
+        }
+
+        try {
+            await smsService.sendTemplate('tenantRegistrationPending', normalizedPhone, {
+                name: owner.name,
+                businessName,
+                planName: planDoc.name,
+                amount: planDoc.price,
+                invoiceNumber: invoice.invoiceNumber,
+            });
+        } catch (err) {
+            logger.error('Registration SMS failed:', err.message);
+        }
+
+        try {
+            const admins = await Admin.find({ isActive: true }).lean();
+            await Promise.allSettled(admins.map((admin) =>
+                emailService.sendTemplate('adminNewRegistration', admin.email, {
+                    businessName,
+                    ownerName: owner.name,
+                    ownerEmail: owner.email,
+                    ownerPhone: normalizedPhone,
+                    planName: planDoc.name,
+                    planCycle: planDoc.cycle,
+                    amount: planDoc.price,
+                    invoiceNumber: invoice.invoiceNumber,
+                    businessType,
+                    moduleName: moduleDisplayName,
+                })
+            ));
+        } catch (err) {
+            logger.error('Admin notification failed:', err.message);
+        }
+    }).catch((err) => logger.error('Post-registration async failed:', err.message));
+
+    const accessToken = jwt.signAccessToken({
+        id: user._id,
+        tenantId: tenant._id,
+        role: 'owner',
+        scope: 'pending',
+    });
+    const refreshToken = jwt.signRefreshToken({
+        id: user._id,
+        tenantId: tenant._id,
     });
 
-    await Module.create({
-      tenantId: tenant._id,
-      moduleName: moduleKeyMap[businessType].replace('module_', ''),
-      status: 'active',
-      features: { pos: true, inventory: true, reports: true, mpesa: true },
+    await auditService.log({
+        tenantId: tenant._id,
+        userId: user._id,
+        userModel: userModelName,
+        action: 'tenant.registered',
+        module: 'admin',
+        resource: 'Tenant',
+        resourceId: tenant._id,
+        details: {
+            businessName,
+            businessType,
+            planName: planDoc.name,
+            invoiceNumber: invoice.invoiceNumber,
+        },
     });
-
-    if (owner.email) {
-      await emailService.sendAccountActivated(
-        owner.email, owner.name, businessName, 'Starter', moduleName,
-        formatDate(startDate), formatDate(trialEnd)
-      );
-    }
-    if (owner.phone) {
-      await smsService.sendAccountActivated(owner.phone, owner.name, businessName);
-    }
 
     return sendSuccess(res, {
-      tenant: { id: tenant._id, businessName, slug, status: tenantStatus },
-      message: 'Your free trial is active! You can login now.',
-    }, 'Registration successful', 201);
-  }
-
-  // PAID
-  if (paymentMethod === 'momo_stk' && paymentPhone) {
-    const mpesaService = require('../../services/mpesaService');
-    const stkResult = await mpesaService.stkPush({
-      phone: paymentPhone,
-      amount: planAmount,
-      accountRef: businessName.substring(0, 12),
-      description: `${planName} Subscription`,
-    });
-
-    if (stkResult.success) {
-      const Subscription = require('../../models/admin/Subscription');
-      await Subscription.create({
-        tenantId: tenant._id,
-        plan: planName.toLowerCase(),
-        amount: planAmount,
-        currency: 'KES',
-        startDate: new Date(),
-        endDate: new Date(),
-        status: 'pending',
-        paymentDetails: {
-          method: 'mpesa',
-          checkoutRequestId: stkResult.checkoutRequestId,
-          merchantRequestId: stkResult.merchantRequestId,
-          phone: paymentPhone,
+        tenant: {
+            id: tenant._id,
+            businessName: tenant.businessName,
+            businessType: tenant.businessType,
+            slug: tenant.slug,
+            status: tenant.status,
         },
-        modules: [moduleKeyMap[businessType].replace('module_', '')],
-      });
-
-      return sendSuccess(res, {
-        tenant: { id: tenant._id, businessName, slug, status: tenantStatus },
-        checkoutRequestId: stkResult.checkoutRequestId,
-        message: 'M-Pesa payment request sent. Check your phone.',
-      }, 'Awaiting payment', 201);
-    }
-  }
-
-  if (owner.email) {
-    await emailService.sendSubscriptionReceived(
-      owner.email, owner.name, businessName, planName, planAmount, moduleName, planCycle, paymentMethodLabel
-    );
-  }
-  if (owner.phone) {
-    await smsService.sendRegistrationConfirmation(owner.phone, owner.name);
-  }
-
-  const admins = await Admin.find({ role: 'super_admin', isActive: true });
-  const today = new Date().toLocaleDateString('en-KE', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-
-  for (const admin of admins) {
-    if (admin.email) {
-      await emailService.sendNewSubscriptionAdmin(admin.email, {
-        businessName, ownerName: owner.name, ownerEmail: owner.email,
-        ownerPhone: owner.phone, plan: planName, amount: planAmount,
-        planCycle, paymentMethod: paymentMethodLabel, modules: moduleName, businessType, date: today,
-      });
-    }
-    if (admin.phone) {
-      await smsService.sendNewRegistrationAdmin(admin.phone, businessName, planName, owner.name);
-    }
-  }
-
-  sendSuccess(res, {
-    tenant: { id: tenant._id, businessName, slug, status: tenantStatus },
-    message: 'Registration submitted. Awaiting approval.',
-  }, 'Registration submitted', 201);
+        user: {
+            id: user._id,
+            name: user.name,
+            email: user.email,
+            phone: user.phone,
+            role: user.role,
+            scope: 'pending',
+        },
+        plan: {
+            name: planDoc.name,
+            price: planDoc.price,
+            cycle: planDoc.cycle,
+        },
+        invoice: {
+            invoiceNumber: invoice.invoiceNumber,
+            amountDue: invoice.amountDue,
+            total: invoice.total,
+            currency: invoice.currency,
+            dueDate: invoice.dueDate,
+            status: invoice.status,
+            paymentState: invoice.paymentState,
+            paymentInstructions: invoice.paymentInstructions,
+            invoiceUrl,
+        },
+        scope: 'pending',
+        accessToken,
+        refreshToken,
+    }, 'Registration submitted. Please complete payment.', 201);
 });
 
 const checkAvailability = asyncHandler(async (req, res) => {
-  const { email, phone, businessName } = req.query;
-  const result = {};
+    const { email, phone, businessName } = req.query;
+    const result = {};
 
-  if (email) {
-    result.emailTaken = !!(await Tenant.findOne({ $or: [{ 'owner.email': email }, { 'contact.email': email }] }));
-  }
-  if (phone) {
-    result.phoneTaken = !!(await Tenant.findOne({ $or: [{ 'owner.phone': phone }, { 'contact.phone': phone }] }));
-  }
-  if (businessName) {
-    result.nameTaken = !!(await Tenant.findOne({ businessName: { $regex: new RegExp(`^${businessName}$`, 'i') } }));
-  }
+    if (email) {
+        result.emailTaken = !!(await Tenant.findOne({
+            $or: [{ 'owner.email': email }, { 'contact.email': email }],
+        }));
+    }
+    if (phone) {
+        const normalized = normalizePhone(phone);
+        result.phoneTaken = !!(await Tenant.findOne({
+            $or: [{ 'owner.phone': normalized }, { 'contact.phone': normalized }],
+        }));
+    }
+    if (businessName) {
+        result.nameTaken = !!(await Tenant.findOne({
+            businessName: { $regex: new RegExp(`^${businessName}$`, 'i') },
+        }));
+    }
 
-  sendSuccess(res, result);
+    return sendSuccess(res, result);
 });
 
-module.exports = { register, checkAvailability };
+module.exports = {
+    register,
+    checkAvailability,
+};

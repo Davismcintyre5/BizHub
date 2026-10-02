@@ -13,12 +13,18 @@ build/
 # Logs
 *.log
 npm-debug.log*
+logs/*
+!logs/.gitkeep
 
 # Runtime data
-backups/
-tmp/
+backups/*
+!backups/.gitkeep
+tmp/*
+!tmp/.gitkeep
 uploads/*
 !uploads/.gitkeep
+public/downloads/*
+!public/downloads/.gitkeep
 
 # OS
 .DS_Store
